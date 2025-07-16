@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SKU Stockout Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #fff; }
+    header { text-align: center; padding: 30px 15px 15px; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: fixed; top: 0; width: 100%; z-index: 10; }
+    header img { height: 50px; }
+    h2 { margin-top: 8px; font-size: 18px; }
+    .container { padding: 160px 15px 20px; }
+    .filters { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+    .filters label { display: flex; flex-direction: column; font-size: 14px; }
+    .filters select { padding: 6px; font-size: 14px; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
+    .report-table th { background: #2c3e50; color: white; padding: 10px; }
+    .report-table td { padding: 10px; border: 1px solid #ccc; }
+    .hidden { display: none; }
+    .card { background: white; margin-bottom: 15px; padding: 15px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+    .card div { margin-bottom: 6px; font-size: 14px; }
+    @media (min-width: 768px) {
+      .filters { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 20px; }
+      .container { padding: 180px 30px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="KT-Logo.png" alt="Kitchen Treasures Logo" />
+    <h2 id="report-title">SKU Stockout Report</h2>
+  </header>
+
+  <div class="container" id="main-view">
+    <div class="filters" id="filter-section">
+      <label>Territory:
+        <select id="territory"><option value="">All Territories</option></select>
+      </label>
+      <label>Beats:
+        <select id="beats"><option value="">All Beats</option></select>
+      </label>
+      <label>Outlet ERP ID:
+        <select id="outlet"><option value="">All Outlets</option></select>
+      </label>
+      <label>Hierarchy:
+        <select id="hierarchy">
+          <option value="">Select Level</option>
+          <option value="TSM">TSM</option>
+          <option value="SO">SO</option>
+        </select>
+      </label>
+      <label id="so-label">SO/TSM:
+        <select id="so"><option value="">All SO/TSM</option></select>
+      </label>
+      <label>Entity Name:
+        <select id="entity"><option value="">All Entities</option></select>
+      </label>
+    </div>
+
+    <div id="card-view" class="hidden"></div>
+
+    <div class="table-wrapper">
+      <table class="report-table hidden" id="data-table">
+        <thead>
+          <tr>
+            <th class="col-tsm">TSM</th>
+            <th class="col-so">SO</th>
+            <th>Territory</th>
+            <th>Beat</th>
+            <th>Outlet ERP ID</th>
+            <th>Outlet Name</th>
+            <th>Entity Name</th>
+            <th>Out of Stock</th>
+            <th class="col-available_only_in_images">Available only in Images</th>
+          </tr>
+        </thead>
+        <tbody id="report-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="stock-info-view" style="display: none;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="text-align: center;">
+        <img src="KT-Logo.png" alt="Kitchen Treasures Logo" style="height: 60px;" />
+        <h2 id="stock-title">SKU Stock Info</h2>
+      </div>
+
+      <button onclick="goBack()" style="
+        margin: 20px 0;
+        padding: 10px 20px;
+        background-color: #2c3e50;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        font-size: 14px;
+      ">← Back</button>
+
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <thead>
+          <tr style="background: #2c3e50; color: white;">
+            <th style="padding: 10px; border: 1px solid #ccc;">Entity Name</th>
+            <th style="padding: 10px; border: 1px solid #ccc;">Available only in Stock</th>
+          </tr>
+        </thead>
+        <tbody id="stock-details"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    fetch("SKU_Stockout_Rep.json")
+      .then(response => response.json())
+      .then(json => {
+        data = json;
+        initializeFilters();
+      }); // 👈 Paste your JSON data from Excel export here
+
+    const selects = {
+      territory: document.getElementById("territory"),
+      beats: document.getElementById("beats"),
+      outlet: document.getElementById("outlet"),
+      so: document.getElementById("so"),
+      entity: document.getElementById("entity"),
+      hierarchy: document.getElementById("hierarchy")
+    };
+    const tbody = document.getElementById("report-body");
+    const table = document.getElementById("data-table");
+    const cards = document.getElementById("card-view");
+
+    const params = new URLSearchParams(window.location.search);
+    const preselectedHierarchy = params.get("hierarchy") || "";
+    const preselectedName = params.get("name") || "";
+    const viewMode = params.get("view") || "";
+
+    function populate(select, key, baseData = data) {
+      const unique = [...new Set(baseData.map(d => d[key]).filter(Boolean))];
+      select.innerHTML = `<option value="">All ${key.replace('_', ' ')}</option>`;
+      unique.forEach(val => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = val;
+        select.appendChild(opt);
+      });
+    }
+
+    function groupByOutlet(rows) {
+      const map = {};
+      rows.forEach(row => {
+        const key = row.Outlet_ERP_ID;
+        if (!map[key]) map[key] = [];
+        map[key].push(row);
+      });
+      return Object.values(map);
+    }
+
+    function showStockInfo(rows) {
+      document.getElementById("main-view").style.display = "none";
+      document.getElementById("stock-info-view").style.display = "block";
+
+      const stockDetails = document.getElementById("stock-details");
+      stockDetails.innerHTML = rows.map(r => `
+        <tr>
+          <td style="padding: 10px; border: 1px solid #ccc;">${r.Entity_Name}</td>
+          <td style="padding: 10px; border: 1px solid #ccc;">${r.Out_of_Stock}</td>
+        </tr>
+      `).join("");
+    }
+
+    function goBack() {
+      document.getElementById("stock-info-view").style.display = "none";
+      document.getElementById("main-view").style.display = "block";
+    }
+
+    const accessControl = {
+      "Asha": "cf38874c0329c479",
+      "BIJISHA OV": "23e6406ed09e5e75",
+      "Beena Sunil Kumar": "fbfa1cc4ff3081e4",
+      "Deepthi": "dd9f8f634468b1ad",
+      "Jisha M": "c38bfe2d968af45c",
+      "Jyothi G": "5fc0a3d16d32aee9",
+      "Malavika": "cc4c174da49df399",
+      "Manju": "2d0ee12fd83c2c80",
+      "Praveena": "2b40ef9d0a340495",
+      "Priya Biju": "3b633de9aa042238",
+      "Rajani V": "a94f668286779a65",
+      "Remya": "32159798e9fa20a8",
+      "Renjini jude": "3de8e5a03e905fa8",
+      "Reshma VP": "2e2408cb73a20420",
+      "Sabitha": "232e240a22f4bc86",
+      "Sajitha. D": "a3468b3833e44c2d",
+      "Shabina": "b709c7747dca5ebb",
+      "Shilpa": "b380d6ae0c9cc2b1",
+      "Sindhu AV": "78fc339d88fc8f1e",
+      "Sujimol": "d228a69224851f66",
+      "Sumangala": "de5bab64882cf107",
+      "Sunitha": "7d9828b1fb1fcab7",
+      "Vineetha": "b535a09b62492e6b",
+      "Vineetha MD": "5f994e5af8bc075a"
+    };
+
+    const name = decodeURIComponent(params.get("name") || "");
+    const token = params.get("token");
+
+    if (!name || !token || accessControl[name] !== token) {
+      document.body.innerHTML = `
+        <div style="text-align: center; padding: 50px;">
+          <h2 style="color: red;">Access Denied</h2>
+          <p>This report is protected. A valid token is required to view it.</p>
+        </div>`;
+      throw new Error("Access denied: missing or invalid token");
+    }
+
+    function render() {
+      const hierarchyKey = selects.hierarchy.value;
+      const isSO = hierarchyKey === "SO";
+      const isTSM = hierarchyKey === "TSM";
+      const filtered = data.filter(row =>
+        (!selects.territory.value || row.Territory === selects.territory.value) &&
+        (!selects.beats.value || row.Beats === selects.beats.value) &&
+        (!selects.outlet.value || row.Outlet_ERP_ID === selects.outlet.value) &&
+        (!selects.entity.value || row.Entity_Name === selects.entity.value) &&
+        (!selects.so.value || row[hierarchyKey] === selects.so.value)
+      );
+
+      document.querySelectorAll(".col-tsm").forEach(el => el.style.display = (isSO || isTSM) ? "none" : "table-cell");
+      document.querySelectorAll(".col-so").forEach(el => el.style.display = isSO ? "none" : "table-cell");
+
+      document.querySelectorAll(".col-available_only_in_images").forEach(el => el.style.display = isSO ? "none" : "table-cell");
+
+      tbody.innerHTML = "";
+      cards.innerHTML = "";
+
+      if (filtered.length > 0 && viewMode === "mobile") {
+        cards.classList.remove("hidden");
+        table.classList.add("hidden");
+
+        const grouped = groupByOutlet(filtered);
+
+        grouped.forEach(group => {
+          const info = group[0];
+          const card = document.createElement("div");
+          card.className = "card";
+          card.innerHTML = `
+            <div><strong>Beat:</strong> ${info.Beats}</div>
+            <div><strong>Outlet ERP ID:</strong> ${info.Outlet_ERP_ID}</div>
+            <div><strong>Outlet Name:</strong> ${info.Outlets_Name}</div>
+            <button>View Stock Info</button>
+          `;
+          
+          const button = card.querySelector("button");
+          button.style.cssText = `
+            margin-top: 10px;
+            padding: 10px 20px;
+            background-color: #2c3e50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+          `;
+          button.addEventListener("click", () => showStockInfo(group));
+          
+          cards.appendChild(card);
+        });
+      } else {
+        table.classList.remove("hidden");
+        cards.classList.add("hidden");
+        filtered.forEach(row => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            ${!(isSO || isTSM) ? `<td class="col-tsm">${row.TSM}</td>` : ""}
+            ${!isSO ? `<td class="col-so">${row.SO}</td>` : ""}
+            <td>${row.Territory}</td>
+            <td>${row.Beats}</td>
+            <td>${row.Outlet_ERP_ID}</td>
+            <td>${row.Outlets_Name}</td>
+            <td>${row.Entity_Name}</td>
+            <td>${row.Out_of_Stock}</td>
+            ${!isSO ? `<td class="col-available_only_in_images">${row.Available_only_in_images}</td>` : ""}`;
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    function initializeFilters() {
+      selects.hierarchy.addEventListener("change", () => {
+        const label = document.getElementById("so-label");
+        const selected = selects.hierarchy.value || 'SO/TSM';
+        label.innerHTML = `${selected}:<select id="so"><option value="">All ${selected}</option></select>`;
+        selects.so = document.querySelector("#so");
+        populate(selects.so, selected, data);
+        selects.so.addEventListener("change", render);
+        render();
+      });
+
+      selects.territory.addEventListener("change", () => {
+        const filtered = data.filter(d => !selects.territory.value || d.Territory === selects.territory.value);
+        populate(selects.beats, "Beats", filtered);
+        populate(selects.outlet, "Outlet_ERP_ID", filtered);
+        populate(selects.entity, "Entity_Name", filtered);
+        render();
+      });
+
+      selects.beats.addEventListener("change", () => {
+        const filtered = data.filter(d =>
+          (!selects.territory.value || d.Territory === selects.territory.value) &&
+          (!selects.beats.value || d.Beats === selects.beats.value));
+        populate(selects.outlet, "Outlet_ERP_ID", filtered);
+        populate(selects.entity, "Entity_Name", filtered);
+        render();
+      });
+
+      selects.outlet.addEventListener("change", render);
+      selects.entity.addEventListener("change", render);
+
+      populate(selects.territory, "Territory");
+      populate(selects.beats, "Beats");
+      populate(selects.outlet, "Outlet_ERP_ID");
+      populate(selects.so, "SO");
+      populate(selects.entity, "Entity_Name");
+
+      render();
+    }
+
+    if (preselectedHierarchy && preselectedName) {
+      document.getElementById("filter-section").style.display = "none";
+      document.getElementById("report-title").textContent = `SKU Stockout Report – ${preselectedName} (${preselectedHierarchy})`;
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      selects.hierarchy.value = preselectedHierarchy || "";
+      if (preselectedHierarchy && preselectedName) {
+        const label = document.getElementById("so-label");
+        label.innerHTML = `${preselectedHierarchy}:<select id="so"><option value="">All ${preselectedHierarchy}</option></select>`;
+        selects.so = document.querySelector("#so");
+        const init = () => {
+          populate(selects.so, preselectedHierarchy, data);
+          selects.so.value = preselectedName;
+          render();
+        };
+        setTimeout(init, 50);
+      } else {
+        initializeFilters();
+      }
+    });
+  </script>
+</body>
+</html>
