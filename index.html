@@ -113,8 +113,27 @@
       .then(response => response.json())
       .then(json => {
         data = json;
-        initializeFilters();
-      }); // 👈 Paste your JSON data from Excel export here
+        
+        // Apply preselected hierarchy and token check AFTER data is available
+        if (preselectedHierarchy && preselectedName) {
+          document.getElementById("filter-section").style.display = "none";
+          document.getElementById("report-title").textContent = `SKU Stockout Report – ${preselectedName} (${preselectedHierarchy})`;
+
+          const label = document.getElementById("so-label");
+          label.innerHTML = `${preselectedHierarchy}:<select id="so"><option value="">All ${preselectedHierarchy}</option></select>`;
+          selects.so = document.querySelector("#so");
+
+          populate(selects.so, preselectedHierarchy, data);
+
+          setTimeout(() => {
+            selects.hierarchy.value = preselectedHierarchy;
+            selects.so.value = preselectedName;
+            render(); // ✅ call render after data, hierarchy, name are set
+          }, 100);
+        } else {
+          initializeFilters(); // default flow
+        }
+      }); 
 
     const selects = {
       territory: document.getElementById("territory"),
