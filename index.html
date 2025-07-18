@@ -221,13 +221,13 @@
     const name = decodeURIComponent(params.get("name") || "");
     const token = params.get("token");
 
-    if (!name || !token || accessControl[name] !== token) {
+    if (name && (!token || accessControl[name] !== token)) {
       document.body.innerHTML = `
         <div style="text-align: center; padding: 50px;">
           <h2 style="color: red;">Access Denied</h2>
           <p>This report is protected. A valid token is required to view it.</p>
         </div>`;
-      throw new Error("Access denied: missing or invalid token");
+      throw new Error("Access denied");
     }
 
     function render() {
